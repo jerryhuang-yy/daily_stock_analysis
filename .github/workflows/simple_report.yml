@@ -1,0 +1,59 @@
+name: 均线简报
+
+on:
+  # 北京时间 10:00（UTC 02:00）和 14:30（UTC 06:30），周一到周五
+  schedule:
+    - cron: '0 2 * * 1-5'
+    - cron: '30 6 * * 1-5'
+
+  # 手动触发，支持强制执行（跳过交易日检查）
+  workflow_dispatch:
+    inputs:
+      force_run:
+        description: '强制运行（跳过交易日检查）'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: simple-report
+  cancel-in-progress: true
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 运行均线简报
+        env:
+          # 自选股列表（必填）
+          STOCK_LIST: ${{ secrets.STOCK_LIST }}
+          # 钉钉 Webhook（通过 CUSTOM_WEBHOOK_URLS 配置）
+          CUSTOM_WEBHOOK_URLS: ${{ secrets.CUSTOM_WEBHOOK_URLS }}
+          # 其他通知渠道（按需配置，与每日分析共用同一套 secrets）
+          WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # 数据源（可选，有则复用，无则走默认免费源）
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          TICKFLOW_API_KEY: ${{ secrets.TICKFLOW_API_KEY }}
+        run: |
+          FORCE_ARG=""
+          if [ "${{ github.event.inputs.force_run }}" = "true" ]; then
+            FORCE_ARG="--force-run"
+          fi
+          python main.py --simple-report $FORCE_ARG

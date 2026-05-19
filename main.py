@@ -381,6 +381,12 @@ def parse_arguments() -> argparse.Namespace:
         help='强制回测（即使已有回测结果也重新计算）'
     )
 
+    parser.add_argument(
+        '--simple-report',
+        action='store_true',
+        help='生成均线简报（现价/MA5/MA20）并推送，不调用 AI 分析'
+    )
+
     return parser.parse_args()
 
 
@@ -862,6 +868,18 @@ def main() -> int:
         return 0
 
     try:
+        # 模式0: 均线简报（无 AI）
+        if getattr(args, 'simple_report', False):
+            logger.info("模式: 均线简报")
+            if not getattr(args, 'force_run', False) and getattr(config, 'trading_day_check_enabled', True):
+                from src.core.trading_calendar import get_open_markets_today
+                if not get_open_markets_today():
+                    logger.info("今日为非交易日，跳过均线简报。可使用 --force-run 强制执行。")
+                    return 0
+            from src.simple_report import run_simple_report
+            run_simple_report(config)
+            return 0
+
         # 模式0: 回测
         if getattr(args, 'backtest', False):
             logger.info("模式: 回测")
