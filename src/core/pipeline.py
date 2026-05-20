@@ -2252,3 +2252,142 @@ class StockAnalysisPipeline:
         if report_type == ReportType.BRIEF and hasattr(self.notifier, "generate_brief_report"):
             return self.notifier.generate_brief_report(results)
         return self.notifier.generate_dashboard_report(results)
+
+    # =========================================================================
+    # 轻量告警模式（无 LLM，无情报搜索）
+    # =========================================================================
+
+    def run_alerts(
+        self,
+        stock_codes: Optional[List[str]] = None,
+        send_notification: bool = True,
+        alert_only_triggered: bool = True,
+    ) -> List[Any]:
+        """
+        轻量告警模式：跳过情报搜索和 AI 分析，仅基于技术指标评估条件并推送。
+
+        Args:
+            stock_codes: 待检查股票列表，默认使用配置中的自选股。
+            send_notification: 是否发送通知。
+            alert_only_triggered: True 时只推送有触发条件的股票。
+        """
+        from src.core.alert_engine import AlertEngine, AlertCheckResult
+
+        if stock_codes is None:
+            self.config.refresh_stock_list()
+            stock_codes = self.config.stock_list
+
+        if not stock_codes:
+            logger.error("未配置自选股列表，请在 .env 文件中设置 STOCK_LIST")
+            return []
+
+        engine = AlertEngine(
+            change_pct_threshold=float(getattr(self.config, 'alert_change_pct_threshold', 5.0)),
+            volume_ratio_threshold=float(getattr(self.config, 'alert_volume_ratio_threshold', 2.0)),
+            check_ma_alignment=bool(getattr(self.config, 'alert_check_ma_alignment', True)),
+            check_price_vs_ma5=bool(getattr(self.config, 'alert_check_price_vs_ma5', True)),
+        )
+
+        logger.info(f"===== 开始告警检查 {len(stock_codes)} 只股票（无 AI）=====")
+
+        resume_reference_time = datetime.now(timezone.utc)
+
+        if len(stock_codes) >= 5:
+            self.fetcher_manager.prefetch_realtime_quotes(stock_codes)
+        self.fetcher_manager.prefetch_stock_names(stock_codes, use_bulk=False)
+
+        all_results: List[AlertCheckResult] = []
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_code = {
+                executor.submit(self._check_alert_for_stock, code, engine, resume_reference_time): code
+                for code in stock_codes
+            }
+            for future in as_completed(future_to_code):
+                code = future_to_code[future]
+                try:
+                    result = future.result()
+                    if result is not None:
+                        all_results.append(result)
+                except Exception as e:
+                    logger.error(f"{code} 告警检查失败: {e}")
+
+        all_results.sort(key=lambda r: r.code)
+
+        if send_notification and self.notifier.is_available():
+            to_notify = [r for r in all_results if r.has_alerts] if alert_only_triggered else all_results
+            if to_notify:
+                message = self._format_alert_summary(to_notify, engine)
+                self.notifier.send(message, route_type="alert")
+                logger.info(f"已发送告警通知：{len(to_notify)} 只股票有触发条件")
+            else:
+                logger.info("无触发告警条件，跳过推送")
+        elif send_notification:
+            logger.info("通知渠道未配置，跳过推送")
+
+        return all_results
+
+    def _check_alert_for_stock(
+        self,
+        code: str,
+        engine: Any,
+        current_time: Optional[datetime] = None,
+    ) -> Optional[Any]:
+        """单只股票的告警检查（无 AI，无情报搜索）"""
+        stock_name = code
+        try:
+            success, err = self.fetch_and_save_stock_data(code, current_time=current_time)
+            if not success:
+                logger.warning(f"{code} 数据获取失败: {err}")
+
+            stock_name = self.fetcher_manager.get_stock_name(code, allow_realtime=False)
+
+            realtime_quote = None
+            if self.config.enable_realtime_quote:
+                try:
+                    realtime_quote = self.fetcher_manager.get_realtime_quote(code, log_final_failure=False)
+                    if realtime_quote and realtime_quote.name:
+                        stock_name = realtime_quote.name
+                except Exception as e:
+                    logger.warning(f"{stock_name}({code}) 实时行情获取失败: {e}")
+
+            if not stock_name:
+                stock_name = f"股票{code}"
+
+            trend_result = None
+            prev_close = None
+            try:
+                _mkt = get_market_for_stock(normalize_stock_code(code))
+                end_date = get_market_now(_mkt).date()
+                start_date = end_date - timedelta(days=89)
+                historical_bars = self.db.get_data_range(code, start_date, end_date)
+                if historical_bars:
+                    df = pd.DataFrame([bar.to_dict() for bar in historical_bars])
+                    if self.config.enable_realtime_quote and realtime_quote:
+                        df = self._augment_historical_with_realtime(df, realtime_quote, code)
+                    trend_result = self.trend_analyzer.analyze(df, code)
+                    # 取倒数第二行收盘价用于穿越检测
+                    if len(df) >= 2:
+                        prev_close = float(df.iloc[-2]['close'])
+            except Exception as e:
+                logger.warning(f"{stock_name}({code}) 趋势分析失败: {e}")
+
+            return engine.check(code, stock_name, realtime_quote, trend_result, prev_close=prev_close)
+
+        except Exception as e:
+            logger.error(f"{stock_name}({code}) 告警检查失败: {e}")
+            return None
+
+    def _format_alert_summary(self, results: List[Any], engine: Any) -> str:
+        """格式化告警汇总消息"""
+        from datetime import timedelta as _td, timezone as _tz
+        tz_cn = _tz(timedelta(hours=8))
+        now = datetime.now(tz_cn)
+        lines = [
+            f"# 📊 技术面告警 {now.strftime('%Y-%m-%d %H:%M')}",
+            f"共 {len(results)} 只股票触发条件\n",
+        ]
+        for result in results:
+            lines.append(engine.format_stock_block(result))
+            lines.append("")
+        return "\n".join(lines)

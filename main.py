@@ -387,6 +387,18 @@ def parse_arguments() -> argparse.Namespace:
         help='生成均线简报（现价/MA5/MA20）并推送，不调用 AI 分析'
     )
 
+    parser.add_argument(
+        '--alert',
+        action='store_true',
+        help='告警模式：仅基于均线排列/价格突破/涨跌幅/量比等规则触发提醒，不调用 AI 和情报搜索'
+    )
+
+    parser.add_argument(
+        '--alert-all',
+        action='store_true',
+        help='告警模式：推送所有股票状态（默认只推送有触发条件的股票）'
+    )
+
     return parser.parse_args()
 
 
@@ -878,6 +890,32 @@ def main() -> int:
                     return 0
             from src.simple_report import run_simple_report
             run_simple_report(config)
+            return 0
+
+        # 模式0: 告警模式（无 AI，无情报搜索）
+        if getattr(args, 'alert', False):
+            logger.info("模式: 规则告警（无 AI）")
+            if not getattr(args, 'force_run', False) and getattr(config, 'trading_day_check_enabled', True):
+                from src.core.trading_calendar import get_open_markets_today
+                if not get_open_markets_today():
+                    logger.info("今日为非交易日，跳过告警检查。可使用 --force-run 强制执行。")
+                    return 0
+            import uuid
+            from src.core.pipeline import StockAnalysisPipeline
+            pipeline = StockAnalysisPipeline(
+                config=config,
+                max_workers=args.workers,
+                query_id=uuid.uuid4().hex,
+                query_source="cli",
+            )
+            alert_only_triggered = not getattr(args, 'alert_all', False)
+            results = pipeline.run_alerts(
+                stock_codes=stock_codes,
+                send_notification=not args.no_notify,
+                alert_only_triggered=alert_only_triggered,
+            )
+            triggered = [r for r in results if r.has_alerts]
+            logger.info(f"告警检查完成：共 {len(results)} 只，触发 {len(triggered)} 只")
             return 0
 
         # 模式0: 回测

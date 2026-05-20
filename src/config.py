@@ -759,6 +759,12 @@ class Config:
     # 是否保存分析上下文快照（用于历史回溯）
     save_context_snapshot: bool = True
 
+    # === 告警模式配置（--alert，无 AI）===
+    alert_change_pct_threshold: float = 5.0      # 涨跌幅触发阈值（%）
+    alert_volume_ratio_threshold: float = 2.0    # 量比触发阈值
+    alert_check_ma_alignment: bool = True        # 是否检查均线排列
+    alert_check_price_vs_ma5: bool = True        # 是否检查价格突破 MA5
+
     # === 回测配置 ===
     backtest_enabled: bool = True
     backtest_eval_window_days: int = 10
@@ -1516,6 +1522,10 @@ class Config:
                 minimum=0.0,
             ),
             save_context_snapshot=os.getenv('SAVE_CONTEXT_SNAPSHOT', 'true').lower() == 'true',
+            alert_change_pct_threshold=parse_env_float(os.getenv('ALERT_CHANGE_PCT_THRESHOLD'), 5.0, field_name='ALERT_CHANGE_PCT_THRESHOLD', minimum=0.0),
+            alert_volume_ratio_threshold=parse_env_float(os.getenv('ALERT_VOLUME_RATIO_THRESHOLD'), 2.0, field_name='ALERT_VOLUME_RATIO_THRESHOLD', minimum=0.0),
+            alert_check_ma_alignment=os.getenv('ALERT_CHECK_MA_ALIGNMENT', 'true').lower() != 'false',
+            alert_check_price_vs_ma5=os.getenv('ALERT_CHECK_PRICE_VS_MA5', 'true').lower() != 'false',
             backtest_enabled=os.getenv('BACKTEST_ENABLED', 'true').lower() == 'true',
             backtest_eval_window_days=parse_env_int(os.getenv('BACKTEST_EVAL_WINDOW_DAYS'), 10, field_name='BACKTEST_EVAL_WINDOW_DAYS', minimum=1),
             backtest_min_age_days=parse_env_int(os.getenv('BACKTEST_MIN_AGE_DAYS'), 14, field_name='BACKTEST_MIN_AGE_DAYS', minimum=1),

@@ -226,7 +226,6 @@ Web 工作台提供配置管理、任务监控、手动分析、历史报告、�
 ```bash
 python main.py --webui
 python main.py --webui-only
-```
 
 访问 `http://127.0.0.1:8000` 即可使用。认证、智能导入、搜索补全、历史报告复制、云服务器访问等细节见 [本地 WebUI 管理界面](docs/full-guide.md#本地-webui-管理界面)。
 
